@@ -4,6 +4,7 @@ import datetime
 import json
 import pandas as pd
 import shutil
+import io
 
 # 페이지 설정
 st.set_page_config(page_title="협력사 & 공용 포털", page_icon="🏭", layout="wide")
@@ -230,6 +231,17 @@ with tab1:
                                 return "color: blue"
                                 
                             st.dataframe(df.style.applymap(color_diff, subset=["차이 (통보-필요)"]), use_container_width=True)
+                            
+                            # 엑셀 다운로드 버튼
+                            buffer = io.BytesIO()
+                            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                                df.to_excel(writer, index=False, sheet_name='소요량조회')
+                            st.download_button(
+                                label="📥 엑셀 파일로 다운로드",
+                                data=buffer.getvalue(),
+                                file_name=f"{vendor_name}_기아소요량_{target_date}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
                         else:
                             st.info("해당 업체의 기아 소요량 데이터가 없거나 매핑되지 않았습니다.")
 
