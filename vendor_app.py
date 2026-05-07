@@ -82,15 +82,25 @@ with tab1:
     vendor_name = st.selectbox("어느 업체이신가요?", ["선택하세요", "다이캐스탈", "현대성우", "코리아휠", "핸즈코퍼레이션", "기타"])
     
     if vendor_name != "선택하세요":
-        uploaded_files = st.file_uploader(f"[{vendor_name}] 생산계획 엑셀 파일을 올려주세요", type=['xlsx', 'xls', 'xlsm'], accept_multiple_files=True)
+        uploaded_files = st.file_uploader(f"[{vendor_name}] 생산계획 엑셀 파일을 올려주세요 (미조회 시 생략 가능)", type=['xlsx', 'xls', 'xlsm'], accept_multiple_files=True)
         
-        if st.button("🚀 제출 및 크로스체크 결과 보기", use_container_width=True):
-            if uploaded_files:
+        col1, col2 = st.columns(2)
+        with col1:
+            btn_preview = st.button("👀 파일 없이 소요량만 미리보기", use_container_width=True)
+        with col2:
+            btn_submit = st.button("🚀 제출 및 크로스체크 결과 보기", use_container_width=True)
+            
+        if btn_preview or btn_submit:
+            parsed_vendor_qty = {}
+            succ_count = 0
+            
+            if btn_submit:
+                if not uploaded_files:
+                    st.warning("⚠️ 업로드된 파일이 없습니다. (파일 없이 소요량만 보시려면 왼쪽 '미리보기' 버튼을 눌러주세요)")
+                    st.stop()
+                    
                 # 1. 파일 저장 및 파싱
-                parsed_vendor_qty = {}
-                succ_count = 0
                 now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                
                 for f in uploaded_files:
                     try:
                         save_path = os.path.join(UPLOAD_DIR, f"{now_str}_{vendor_name}_{f.name}")
@@ -127,18 +137,22 @@ with tab1:
                 
                 if succ_count > 0:
                     st.success(f"🎉 성공적으로 전송 및 분석을 마쳤습니다. (기준: {vendor_name})")
-                    
-                    # 2. 시스템 베이스 로드 및 비교
-                    plan = load_data('plan', {})
-                    bom = load_data('bom_master', [])
-                    inv = load_data('inventory', {})
-                    part_vendor = load_data('part_vendor', {})
-                    part_name = load_data('part_name', {})
-                    
-                    dates = sorted(list(plan.keys()), reverse=True)
-                    if not dates:
-                        st.warning("⚠️ 현재 관리자 시스템에 등록된 기아 생산계획(Base Plan) 데이터가 없어 비교할 수 없습니다. (먼저 관리자 시스템을 통해 생산계획을 동기화해야 합니다.)")
-                    else:
+            else:
+                st.info("💡 파일 제출 없이 기아 소요량만 먼저 조회합니다.")
+                succ_count = 1  # 패스 통과용
+                
+            if succ_count > 0:
+                # 2. 시스템 베이스 로드 및 비교
+                plan = load_data('plan', {})
+                bom = load_data('bom_master', [])
+                inv = load_data('inventory', {})
+                part_vendor = load_data('part_vendor', {})
+                part_name = load_data('part_name', {})
+                
+                dates = sorted(list(plan.keys()), reverse=True)
+                if not dates:
+                    st.warning("⚠️ 현재 관리자 시스템에 등록된 기아 생산계획(Base Plan) 데이터가 없어 비교할 수 없습니다. (먼저 관리자 시스템을 통해 생산계획을 동기화해야 합니다.)")
+                else:
                         target_date = dates[0]
                         reqs = {}
                         
@@ -184,28 +198,40 @@ with tab1:
                             data = []
                             for k, v in reqs.items():
                                 pn_key = k[1].replace("-", "").replace(" ", "").upper()
-                                vendor_q = parsed_vendor_qty.get(pn_key, 0)
-                                diff = vendor_q - v
+                                vendor_q = parsed_vendor_qty.get(pn_key, 0) if btn_submit else None
+                                diff = vendor_q - v if vendor_q is not None else None
+                                
                                 data.append({
                                     "차종": k[0],
                                     "품번": k[1],
                                     "품명": part_name.get(k[1], ""),
-                                    "기아 필요량": v,
-                                    "업체 통보량": vendor_q,
+                                    "기아 필요량": f"{v:,}",
+                                    "업체 통보량": f"{vendor_q:,}" if vendor_q is not None else "미제출",
                                     "차이 (통보-필요)": diff
                                 })
                                 
-                            st.markdown(f"#### 🔍 [ {vendor_name} ] 크로스체크 결과 (시스템 기준일: {target_date})")
+                            if btn_submit:
+                                st.markdown(f"#### 🔍 [ {vendor_name} ] 크로스체크 결과 (시스템 기준일: {target_date})")
+                            else:
+                                st.markdown(f"#### 🔍 [ {vendor_name} ] 기아 소요량 사전 조회 (시스템 기준일: {target_date})")
+                                
                             df = pd.DataFrame(data).sort_values(["차종", "품번"])
-                            st.dataframe(df.style.format({
-                                "기아 필요량": "{:,.0f}", 
-                                "업체 통보량": "{:,.0f}", 
-                                "차이 (통보-필요)": "{:,.0f}"
-                            }).applymap(lambda x: "color: red; font-weight: bold" if pd.notna(x) and x < 0 else "color: blue", subset=["차이 (통보-필요)"]), use_container_width=True)
+                            
+                            # 차이 컬럼 포매팅 함수
+                            def format_diff(val):
+                                if val is None: return "-"
+                                return f"{val:,}"
+                                
+                            df["차이 (통보-필요)"] = df["차이 (통보-필요)"].apply(format_diff)
+                            
+                            def color_diff(val):
+                                if isinstance(val, str) and val.startswith("-") and val != "-":
+                                    return "color: red; font-weight: bold"
+                                return "color: blue"
+                                
+                            st.dataframe(df.style.applymap(color_diff, subset=["차이 (통보-필요)"]), use_container_width=True)
                         else:
                             st.info("해당 업체의 기아 소요량 데이터가 없거나 매핑되지 않았습니다.")
-            else:
-                st.warning("⚠️ 업로드된 파일이 없습니다.")
 
 with tab2:
     st.subheader("📁 기아 생산계획 (Base Plan) 공유보드")
