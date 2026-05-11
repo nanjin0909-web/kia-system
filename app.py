@@ -12,7 +12,7 @@ st.set_page_config(page_title="스마트 수불/실적 시스템 v56", layout="w
 # ==========================================
 SAVE_DIR = "data/saves_v56"
 if not os.path.exists(SAVE_DIR):
-    os.makedirs(SAVE_DIR)
+    os.makedirs(SAVE_DIR, exist_ok=True)
 
 FILES = {
     'inventory': os.path.join(SAVE_DIR, "inventory.json"),
@@ -73,7 +73,7 @@ def get_mapped_car_name(car_code):
     c = str(car_code).strip().upper()
     if "8V" in c: return "타스만"
     if "GZ" in c or "HC" in c: return "쏘렌토"
-    if "OT" in c or "TO" in c: return "니로(SG2)"
+    if "OT" in c or "TO" in c: return "니로"
     if "5H" in c: return "SP3"
     if "AS" in c: return "EV6"
     if "EX" in c or "HV" in c: return "K5"
@@ -120,7 +120,7 @@ def parse_bom(file):
             top = str(header1[i]).strip()
             if top.startswith("Unnamed") or top == "": top = last_top
             else: last_top = top
-            sub = str(header2[i]).strip()
+            sub = str(header2.iloc[i]).strip()
             cols.append(top if sub.startswith("Unnamed") or sub == "" else f"{top}_{sub}")
         df.columns = cols
         df = df.iloc[1:].reset_index(drop=True)
@@ -171,7 +171,9 @@ def parse_bom(file):
         save_data('bom_master'); save_data('part_name')
         if 'part_vendor' in st.session_state: save_data('part_vendor')
         return f"✅ BOM 갱신 완료 ({len(new_spec)}건)"
-    except Exception as e: return f"❌ 에러: {e}"
+    except Exception as e:
+        import traceback
+        return f"❌ 에러: {e}\n\n```python\n{traceback.format_exc()}\n```"
 
 def parse_inbound(files, in_date):
     count = 0
@@ -315,8 +317,8 @@ def parse_system_plan(files, fallback_date):
                 for key, val in t_sales[target_date].items():
                     info = alc_info.get(key)
                     if info:
-                        f_name = "화성"
-                        l_name = info['fac'].replace("라인", "라")
+                        f_name = "평택공장"
+                        l_name = info['fac'].replace("라인", "공장")
                         car = info['car']
                         qty = val * info['mul']
                         k = (f_name, l_name, car)
