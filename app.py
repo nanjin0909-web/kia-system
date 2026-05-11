@@ -69,6 +69,17 @@ def get_mapped_factory(raw_factory):
     if f in ["2923", "3라인", "H3"]: return "3라인"
     return None
 
+def get_mapped_car_name(car_code):
+    c = str(car_code).strip().upper()
+    if "8V" in c: return "타스만"
+    if "GZ" in c or "HC" in c: return "쏘렌토"
+    if "OT" in c or "TO" in c: return "니로(SG2)"
+    if "5H" in c: return "SP3"
+    if "AS" in c: return "EV6"
+    if "EX" in c or "HV" in c: return "K5"
+    if "GG" in c or "GL" in c: return "K8"
+    return c
+
 def is_excluded_car(fac, car):
     f = get_mapped_factory(fac)
     c_up = str(car).strip().upper()
@@ -279,7 +290,67 @@ def parse_system_plan(files, fallback_date):
             
     if act_count > 0 or plan_count > 0:
         save_data('sales'); save_data('plan')
-        return f"✅ 실적 {act_count}건, 계획 {plan_count}건 파싱"
+        
+        # === 일일동향 자동 연동 로직 ===
+        try:
+            import requests
+            import time
+            GAS_URL = "https://script.google.com/macros/s/AKfycbzP_P9wP_mEfh88XtaS1QKbLl1KlS7RwDWMVS-SvPxtz2rXR00LlsBay7gnw2Dfdw3d/exec"
+            
+            # 1. BOM 기반 소요량 매핑
+            alc_info = {}
+            for sp in st.session_state.bom_master:
+                fac = str(sp.get('_factory', '미상')).strip()
+                car = get_mapped_car_name(str(sp.get('_carModel', '차종미상')).strip())
+                alc = str(sp.get('_alc', '')).strip().upper()
+                mapped_fac = get_mapped_factory(fac)
+                q = get_bom_quantities(sp)
+                mul = q.get('rqW', 4) + q.get('sqW', 0)
+                if mapped_fac:
+                    alc_info[f"{mapped_fac}_{alc}"] = {"fac": mapped_fac, "car": car, "mul": mul}
+
+            # 2. 목표 일자(D-1 실적) 데이터 집계
+            agg = {}
+            if target_date in t_sales:
+                for key, val in t_sales[target_date].items():
+                    info = alc_info.get(key)
+                    if info:
+                        f_name = "화성"
+                        l_name = info['fac'].replace("라인", "라")
+                        car = info['car']
+                        qty = val * info['mul']
+                        k = (f_name, l_name, car)
+                        agg[k] = agg.get(k, 0) + qty
+
+            # 3. GAS 데이터 가져오기 및 POST
+            if agg:
+                res = requests.get(GAS_URL).json()
+                prod_records = res.get("production", [])
+                
+                for (f_name, l_name, car), qty in agg.items():
+                    existing = next((r for r in prod_records if str(r.get('date')) == target_date and r.get('factory') == f_name and r.get('line') == l_name and r.get('car_model') == car), None)
+                    
+                    payload = {
+                        "target": "production",
+                        "date": target_date,
+                        "factory": f_name,
+                        "line": l_name,
+                        "car_model": car,
+                        "daily_actual": qty
+                    }
+                    if existing:
+                        payload["action"] = "update"
+                        payload["id"] = existing["id"]
+                    else:
+                        payload["action"] = "add"
+                        payload["id"] = int(time.time() * 1000)
+                        
+                    requests.post(GAS_URL, data=payload)
+                    
+            return f"✅ 실적 {act_count}건, 계획 {plan_count}건 파싱 (일일동향 연동 성공 🚀)"
+        except Exception as e:
+            return f"✅ 실적 {act_count}건, 계획 {plan_count}건 파싱 (일일동향 연동 실패: {e})"
+            
     return "❌ 시스템 소요량 데이터 추출 실패"
 
 def parse_vendor_plan(files):
@@ -1154,7 +1225,7 @@ elif menu == "5. 실적 가로전개표":
         alc_info = {}
         for sp in st.session_state.bom_master:
             fac = str(sp.get('_factory', '미상')).strip()
-            car = str(sp.get('_carModel', '차종미상')).strip()
+            car = get_mapped_car_name(str(sp.get('_carModel', '차종미상')).strip())
             alc = str(sp.get('_alc', '')).strip().upper()
             mapped_fac = get_mapped_factory(fac)
             
