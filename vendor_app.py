@@ -212,9 +212,9 @@ with tab1:
                                 })
                                 
                             if btn_submit:
-                                st.markdown(f"#### 🔍 [ {vendor_name} ] 크로스체크 결과 (시스템 기준일: {target_date})")
+                                st.markdown(f"#### 🔍 [ {vendor_name} ] 크로스체크 결과 (시스템: {target_date} 실적 반영분)")
                             else:
-                                st.markdown(f"#### 🔍 [ {vendor_name} ] 기아 소요량 사전 조회 (시스템 기준일: {target_date})")
+                                st.markdown(f"#### 🔍 [ {vendor_name} ] 기아 소요량 사전 조회 (시스템: {target_date} 실적 반영분)")
                                 
                             df = pd.DataFrame(data).sort_values(["차종", "품번"])
                             
