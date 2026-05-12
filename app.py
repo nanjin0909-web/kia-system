@@ -50,9 +50,14 @@ def save_data(key):
     if get_drive_service():
         save_to_cloud(key, data)
 
+# 세션 초기화 및 데이터 동기화
 for k in FILES.keys():
     if k not in st.session_state:
         st.session_state[k] = load_data(k, [] if k == 'bom_master' else {})
+    else:
+        # 이미 세션에 있더라도, 파일이 더 최신일 수 있으므로 (다른 탭 작업 등) 
+        # 로컬 파일에서 주기적으로 불러오거나 보존 로직 확인
+        pass
 
 # ==========================================
 # 2. 유틸리티 함수 및 파싱 로직
