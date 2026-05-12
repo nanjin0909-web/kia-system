@@ -198,7 +198,7 @@ with tab1:
                                 pk_up = str(pk).upper()
                                 if "품번" in pk_up or "PART NO" in pk_up:
                                     pn = str(pv).strip()
-                                    if pn and pn != "-" and ("휠" in pk_up or "WHEEL" in pk_up):
+                                    if pn and pn != "-" and str(pn).upper() != "NAN":
                                         is_spare = "보조" in pk_up or "SPARE" in pk_up
                                         qty = q.get('sqW',0) if is_spare else q.get('rqW',4)
                                         
@@ -211,6 +211,7 @@ with tab1:
                                             if plan_qty > 0:
                                                 group_key = (car, pn)
                                                 reqs[group_key] = reqs.get(group_key, 0) + (plan_qty * qty)
+
                         
                         if reqs:
                             data = []
@@ -247,7 +248,7 @@ with tab1:
                                     return "color: red; font-weight: bold"
                                 return "color: blue"
                                 
-                            st.dataframe(df.style.applymap(color_diff, subset=["차이 (통보-필요)"]), use_container_width=True)
+                            st.dataframe(df.style.map(color_diff, subset=["차이 (통보-필요)"]), use_container_width=True)
                             
                             # 엑셀 다운로드 버튼
                             buffer = io.BytesIO()
