@@ -108,7 +108,24 @@ with tab1:
                         with open(save_path, "wb") as out_file: out_file.write(f.getbuffer())
                         succ_count += 1
                         
-                        df = pd.read_excel(f, header=None)
+                        try:
+                            df = pd.read_excel(f, header=None)
+                        except Exception as ex:
+                            if 'StringProperty' in str(ex) or 'openpyxl' in str(ex):
+                                import zipfile
+                                from io import BytesIO
+                                f.seek(0)
+                                zin = zipfile.ZipFile(f)
+                                zout_buf = BytesIO()
+                                zout = zipfile.ZipFile(zout_buf, 'w')
+                                for item in zin.infolist():
+                                    if 'docProps/custom.xml' not in item.filename:
+                                        zout.writestr(item, zin.read(item.filename))
+                                zout.close()
+                                zout_buf.seek(0)
+                                df = pd.read_excel(zout_buf, header=None)
+                            else:
+                                raise ex
                         for i in range(len(df)):
                             if df.shape[1] > 2:
                                 col_c = str(df.iloc[i, 2]).strip()
