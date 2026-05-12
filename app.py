@@ -109,18 +109,32 @@ def extract_date_from_filename(file_path, fallback):
         return f"{y}-{m2.group(1)}-{m2.group(2)}"
     return fallback
 
+def safe_read_excel(file, **kwargs):
+    """calamine 엔진 우선, 실패 시 openpyxl로 폴백 (double free 크래시 방지)"""
+    try:
+        if hasattr(file, 'seek'): file.seek(0)
+        return pd.read_excel(file, engine='calamine', **kwargs)
+    except Exception:
+        try:
+            if hasattr(file, 'seek'): file.seek(0)
+            return pd.read_excel(file, **kwargs)
+        except Exception as e:
+            raise e
+
 def parse_bom(file):
     try:
-        df = pd.read_excel(file)
+        df = safe_read_excel(file)
         if len(df) < 2: return "❌ 사양표 데이터 유효하지 않음"
         header1 = df.columns
         header2 = df.iloc[0].fillna('')
+        header1_vals = header1.values
+        header2_vals = header2.values
         cols, last_top = [], ""
-        for i in range(len(header1)):
-            top = str(header1[i]).strip()
+        for i in range(len(header1_vals)):
+            top = str(header1_vals[i]).strip()
             if top.startswith("Unnamed") or top == "": top = last_top
             else: last_top = top
-            sub = str(header2.iloc[i]).strip()
+            sub = str(header2_vals[i]).strip()
             cols.append(top if sub.startswith("Unnamed") or sub == "" else f"{top}_{sub}")
         df.columns = cols
         df = df.iloc[1:].reset_index(drop=True)
@@ -173,7 +187,8 @@ def parse_bom(file):
         return f"✅ BOM 갱신 완료 ({len(new_spec)}건)"
     except Exception as e:
         import traceback
-        return f"❌ 에러: {e}\n\n```python\n{traceback.format_exc()}\n```"
+        tb = traceback.format_exc()
+        return f"❌ 에러발생: {e} | 상세: {tb}"
 
 def parse_inbound(files, in_date):
     count = 0
@@ -181,7 +196,7 @@ def parse_inbound(files, in_date):
         st.session_state.inbound[in_date] = {}
         
     for file in files:
-        df = pd.read_excel(file)
+        df = safe_read_excel(file)
         for _, row in df.iterrows():
             pn = str(row.iloc[1]).strip()
             pname = str(row.iloc[2]).strip()
@@ -235,7 +250,7 @@ def parse_system_plan(files, fallback_date):
             
         try:
             # f가 파일경로(str)일 수도 있고 BytesIO(Streamlit UploadedFile)일 수도 있음
-            df = pd.read_excel(f, header=None)
+            df = safe_read_excel(f, header=None)
             start_row = -1
             c_dminus1, c_d0, c_alc, c_fac, c_carcode = -1, -1, -1, -1, -1
             
@@ -789,7 +804,7 @@ elif menu == "3. 업체계획 크로스체크":
         for f in vendor_files_list:
             try:
                 # pandas로 엑셀 읽기 (첫 행부터 스캔)
-                df = pd.read_excel(f, header=None)
+                df = safe_read_excel(f, header=None)
                 # 데이터 행 순회
                 for i in range(len(df)):
                     # A열(0), C열(2), D열(3), H열(7), P열(15) 등 필요 열 스캔
@@ -914,7 +929,7 @@ elif menu == "3. 업체계획 크로스체크":
                 "시스템 소요량(EA)": "{:,.0f}", 
                 "업체 통보량(EA)": "{:,.0f}", 
                 "차이 (통보-전개량)": "{:,.0f}"
-            }).applymap(lambda x: "color: red" if pd.notna(x) and x < 0 else "color: blue", subset=["차이 (통보-전개량)"]), use_container_width=True)
+            }).map(lambda x: "color: red" if pd.notna(x) and x < 0 else "color: blue", subset=["차이 (통보-전개량)"]), use_container_width=True)
         else:
             st.info("해당 일자에 산출된 휠 소요량이 없습니다.")
     
@@ -1017,7 +1032,8 @@ elif menu == "4. 소요량 전개표":
                 
                 try:
                     import pandas as pd
-                    df = pd.read_excel(target_file, header=None)
+                    df = safe_read_excel(target_file, header=None)
+
                     
                     start_row, c_fac, c_alc = -1, -1, -1
                     target_cols = {}
