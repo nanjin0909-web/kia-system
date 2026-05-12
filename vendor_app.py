@@ -80,7 +80,16 @@ tab1, tab2 = st.tabs(["🚀 업체 통보 (크로스체크)", "📁 기아생산
 
 with tab1:
     st.subheader("업체 생산계획 업로드 및 결과 확인")
-    vendor_name = st.selectbox("어느 업체이신가요?", ["선택하세요", "다이캐스탈", "현대성우", "코리아휠", "핸즈코퍼레이션", "기타"])
+    vendor_name = st.selectbox("어느 업체이신가요?", [
+        "선택하세요",
+        "다이캐스탈",
+        "현대성우",
+        "코리아휠",
+        "핸즈코퍼레이션",
+        "대원알텍",
+        "보정입중",
+        "기타"
+    ])
     
     if vendor_name != "선택하세요":
         uploaded_files = st.file_uploader(f"[{vendor_name}] 생산계획 엑셀 파일을 올려주세요 (미조회 시 생략 가능)", type=['xlsx', 'xls', 'xlsm'], accept_multiple_files=True)
@@ -168,6 +177,27 @@ with tab1:
                 part_name = load_data('part_name', {})
                 
                 dates = sorted(list(plan.keys()), reverse=True)
+                
+                def vend_match(bom_vend, sel_vend):
+                    """업체명 유연 매칭: 완전일치 OR 포함관계 OR 별칭 테이블"""
+                    # 별칭 정규화 테이블 (BOM 표기 → 표준 업체명)
+                    ALIAS = {
+                        "핸즈": "핸즈코퍼레이션",
+                        "성우": "현대성우",
+                        "현대성우캐스팅": "현대성우",
+                        "현대성우캐스팅(주)충주공장": "현대성우",
+                        "현대성우캐스팅(주) 충주공장": "현대성우",
+                        "코리아휠주식회사": "코리아휠",
+                        "코리아휠 주식회사": "코리아휠",
+                        "센사타": "센싸타",
+                        "컨티네탈": "컨티넨탈",
+                        "컨티넨탈": "콘티넨탈",
+                    }
+                    if not bom_vend or not sel_vend: return False
+                    b_raw = bom_vend.strip()
+                    b = ALIAS.get(b_raw, b_raw).replace(" ", "")
+                    s = sel_vend.strip().replace(" ", "")
+                    return b == s or b in s or s in b
                 if not dates:
                     st.warning("⚠️ 현재 관리자 시스템에 등록된 기아 생산계획(Base Plan) 데이터가 없어 비교할 수 없습니다. (먼저 관리자 시스템을 통해 생산계획을 동기화해야 합니다.)")
                 else:
@@ -206,7 +236,7 @@ with tab1:
                                         if not vend: vend = part_vendor.get(pn, "")
                                         if not vend: vend = inv.get(pn, {}).get("vendorName", "")
                                         
-                                        if vend == vendor_name and qty > 0:
+                                        if vend_match(vend, vendor_name) and qty > 0:
                                             plan_qty = plan.get(target_date, {}).get(k, 0)
                                             if plan_qty > 0:
                                                 group_key = (car, pn)
