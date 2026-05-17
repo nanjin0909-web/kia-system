@@ -5,7 +5,7 @@ import os
 import re
 from io import BytesIO
 
-st.set_page_config(page_title="스마트 수불/실적 시스템 v56.3", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="스마트 수불/실적 시스템 v56.4", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # 1. 자동 저장소 및 상태 관리
@@ -33,14 +33,12 @@ def load_data(key, default):
     # 클라우드에서 먼저 시도
     cloud_data = load_from_cloud(key, None)
     if cloud_data is not None:
-        # 클라우드 데이터를 로컬에도 캐싱
         try:
             with open(FILES[key], "w", encoding="utf-8") as f:
                 json.dump(cloud_data, f, ensure_ascii=False, indent=2)
         except: pass
         return cloud_data
     
-    # 클라우드 실패 시 로컬 시도
     if os.path.exists(FILES[key]):
         try:
             with open(FILES[key], "r", encoding="utf-8") as f:
@@ -54,9 +52,10 @@ def save_data(key):
     try:
         with open(FILES[key], "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-    except: pass
+    except Exception as e:
+        st.error(f"로컬 저장 실패 ({key}): {e}")
     
-    # 2. 클라우드 저장 (Secrets 설정되어 있으면 실행됨)
+    # 2. 클라우드 저장
     success = save_to_cloud(key, data)
     return success
 
@@ -74,19 +73,6 @@ def get_mapped_factory(raw_factory):
     if f in ["2912", "2922", "2라인", "H2"]: return "2라인"
     if f in ["2913", "2923", "3라인", "H3"]: return "3라인"
     return "기타"
-
-def get_mapped_car_name(car_code):
-    c = str(car_code).strip().upper()
-    if "8V" in c: return "타스만"
-    if "GZ" in c or "HC" in c: return "쏘렌토"
-    if "OT" in c or "TO" in c: return "니로"
-    if "5H" in c: return "SP3"
-    if "AS" in c: return "EV6"
-    if "EX" in c or "HV" in c: return "K5"
-    if "GG" in c or "GL" in c: return "K8"
-    if "DL" in c: return "K5(DL3)"
-    if "NQ" in c: return "스포티지"
-    return c
 
 def extract_date_from_filename(file_path, fallback):
     filename = os.path.basename(str(file_path))
@@ -140,7 +126,7 @@ def parse_bom(file):
         st.session_state.part_vendor.update(new_vendors)
         save_data('bom_master')
         save_data('part_vendor')
-        return f"✅ BOM 갱신 완료 ({len(new_spec)}건) 및 클라우드 동기화"
+        return f"✅ BOM 갱신 완료 ({len(new_spec)}건)"
     except Exception as e: return f"❌ BOM 에러: {e}"
 
 def parse_system_plan(files, fallback_date):
@@ -172,20 +158,53 @@ def parse_system_plan(files, fallback_date):
         except: pass
     if plan_count > 0:
         save_data('plan')
-        return f"✅ 계획 {plan_count}건 파싱 완료 및 클라우드 동기화"
+        return f"✅ 계획 {plan_count}건 파싱 완료"
     return "❌ 데이터 추출 실패"
 
-# ==========================================
-# 3. 사이드바 UI
-# ==========================================
-st.sidebar.markdown("<div class='sidebar-title'>🚀 스마트 공정 통합 관리 시스템</div>", unsafe_allow_html=True)
-st.sidebar.write("Ver 56.3 (데이터 통합 관리)")
+def parse_vendor_plan(files):
+    all_vendor_plan = {}
+    for f in files:
+        try:
+            df = safe_read_excel(f, header=None)
+            fname = f.name.upper()
+            if "핸즈" in fname:
+                for i in range(4, len(df)):
+                    row = df.iloc[i]
+                    if pd.isna(row[0]) or str(row[0]).strip() == "": continue
+                    pn = str(row[1]).strip().replace("-", "").upper()
+                    try:
+                        qty = int(float(str(row[16]).replace(',', ''))) # Q열
+                        if qty > 0: all_vendor_plan[pn] = all_vendor_plan.get(pn, 0) + qty
+                    except: pass
+            else:
+                # 기본 파서 (B열 품번, P열 수량 가정)
+                for i in range(len(df)):
+                    pn = str(df.iloc[i, 1]).strip().replace("-", "").upper()
+                    try:
+                        qty = int(float(str(df.iloc[i, 15]).replace(',', '')))
+                        if qty > 0: all_vendor_plan[pn] = all_vendor_plan.get(pn, 0) + qty
+                    except: pass
+        except: pass
+    st.session_state.vendor_plan = all_vendor_plan
+    save_data('vendor_plan')
+    return f"✅ 업체 계획 {len(all_vendor_plan)}건 갱신"
 
-menu = st.sidebar.radio("메뉴를 선택하세요", ["1. 데이터 업로드 센터", "2. 상세시간 소요량 전개", "3. 업체계획 크로스체크"])
+# ==========================================
+# 3. 사이드바 UI 및 메뉴
+# ==========================================
+st.sidebar.markdown("<div style='font-size:20px; font-weight:bold; color:#1E3A8A;'>🚀 스마트 공정 관리 시스템</div>", unsafe_allow_html=True)
+st.sidebar.write(f"Ver 56.4 (클라우드 동기화)")
+
+menu = st.sidebar.radio("메뉴를 선택하세요", [
+    "1. 데이터 업로드 센터",
+    "2. 수불/실적 모니터링",
+    "3. 상세시간 소요량 전개",
+    "4. 업체계획 크로스체크"
+])
 
 if menu == "1. 데이터 업로드 센터":
     st.title("📁 데이터 업로드 센터")
-    st.info("💡 여기서 올린 데이터는 모든 메뉴에서 자동으로 공유 및 클라우드 저장됩니다.")
+    st.info("💡 여기서 올린 데이터는 모든 메뉴에서 공유되며 클라우드에 자동 저장됩니다.")
     with st.expander("⚙️ 0. 기초 마스터 데이터 갱신 (BOM 사양표)", expanded=True):
         f1 = st.file_uploader("BOM 사양표 (Excel)", type=['xls', 'xlsx'])
         if st.button("마스터 갱신") and f1: st.success(parse_bom(f1))
@@ -193,15 +212,20 @@ if menu == "1. 데이터 업로드 센터":
         d2 = st.date_input("기준일")
         f3 = st.file_uploader("전개표 업로드", type=['xls', 'xlsx'], accept_multiple_files=True)
         if st.button("계획 파싱") and f3: st.success(parse_system_plan(f3, str(d2)))
+    with st.expander("🚚 2. 업체 통보 계획 업로드", expanded=True):
+        f4 = st.file_uploader("업체 파일", type=['xls', 'xlsx'], accept_multiple_files=True)
+        if st.button("업체 데이터 파싱") and f4: st.success(parse_vendor_plan(f4))
 
-elif menu == "2. 상세시간 소요량 전개":
+elif menu == "2. 수불/실적 모니터링":
+    st.title("📊 수불/실적 모니터링")
+    st.info("준비 중인 메뉴입니다. (기본 데이터 연동 완료)")
+
+elif menu == "3. 상세시간 소요량 전개":
     st.title("🕒 상세시간 소요량 전개")
     dates = sorted(list(st.session_state.plan.keys()), reverse=True)
     if not dates: st.warning("업로드 센터에서 생산계획을 먼저 올려주세요.")
     else:
         sel_date = st.selectbox("조회 일자", dates)
-        st.write(f"### {sel_date} 생산계획 기반 소요량")
-        # 기존 로직과 동일하게 전개하되 session_state.plan 사용
         plan_d = st.session_state.plan.get(sel_date, {})
         reqs = {}
         for key, total_qty in plan_d.items():
@@ -215,11 +239,12 @@ elif menu == "2. 상세시간 소요량 전개":
                         pn_clean = pn.replace("-", "").upper()
                         reqs[pn_clean] = reqs.get(pn_clean, 0) + (total_qty * q_val)
         if reqs:
-            df = pd.DataFrame([{"품번": k, "소요량": v} for k, v in reqs.items()])
+            st.write(f"### {sel_date} 소요량 집계")
+            df = pd.DataFrame([{"품번": k, "업체명": st.session_state.part_vendor.get(k, "미상"), "소요량": v} for k, v in reqs.items()])
             st.dataframe(df, use_container_width=True)
         else: st.info("데이터가 없습니다.")
 
-elif menu == "3. 업체계획 크로스체크":
+elif menu == "4. 업체계획 크로스체크":
     st.title("⚖️ 업체계획 크로스체크")
     dates = sorted(list(st.session_state.plan.keys()), reverse=True)
     if not dates: st.warning("시스템 계획 데이터가 없습니다.")
