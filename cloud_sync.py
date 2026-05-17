@@ -18,7 +18,6 @@ def get_spreadsheet_id():
             return st.secrets["google_sheets"]["spreadsheet_id"]
     except:
         pass
-    # fallback (사용자가 제공한 최신 ID)
     return "1XgRR6AG45QwuLBghyv7htc8ICYByvs1DDxhTMzcEY6Y"
 
 @st.cache_resource
@@ -61,9 +60,19 @@ def save_to_cloud(key, data):
     if not service or not spreadsheet_id: return False
     try:
         _ensure_sheet(service, spreadsheet_id, key)
-        # JSON 데이터를 통째로 한 셀에 저장 (백업 용도)
+        
+        # 5만자 제한 해결: 데이터를 3만자 단위로 쪼개서 여러 행에 저장
         json_str = json.dumps(data, ensure_ascii=False)
-        body = {'values': [[json_str]]}
+        chunk_size = 30000
+        chunks = [json_str[i:i+chunk_size] for i in range(0, len(json_str), chunk_size)]
+        
+        # 기존 내용 삭제 후 새로 쓰기
+        service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range=f"{key}!A:A"
+        ).execute()
+        
+        body = {'values': [[c] for c in chunks]}
         service.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
             range=f"{key}!A1",
@@ -82,11 +91,13 @@ def load_from_cloud(key, default):
     try:
         result = service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
-            range=f"{key}!A1"
+            range=f"{key}!A:A"
         ).execute()
         values = result.get('values', [])
-        if values and values[0]:
-            return json.loads(values[0][0])
+        if values:
+            # 여러 행에 나뉘어 저장된 데이터를 다시 합치기
+            full_json_str = "".join([row[0] for row in values if row])
+            return json.loads(full_json_str)
     except Exception as e:
         pass
     return default
