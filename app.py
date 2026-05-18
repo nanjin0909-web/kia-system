@@ -4,8 +4,9 @@ import json
 import os
 import re
 from io import BytesIO
+import datetime
 
-st.set_page_config(page_title="스마트 수불/실적 시스템 v56.4", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="스마트 수불/실적 시스템 v56.5", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # 1. 자동 저장소 및 상태 관리
@@ -30,7 +31,6 @@ FILES = {
 from cloud_sync import save_to_cloud, load_from_cloud, get_drive_service
 
 def load_data(key, default):
-    # 클라우드에서 먼저 시도
     cloud_data = load_from_cloud(key, None)
     if cloud_data is not None:
         try:
@@ -38,7 +38,6 @@ def load_data(key, default):
                 json.dump(cloud_data, f, ensure_ascii=False, indent=2)
         except: pass
         return cloud_data
-    
     if os.path.exists(FILES[key]):
         try:
             with open(FILES[key], "r", encoding="utf-8") as f:
@@ -48,18 +47,12 @@ def load_data(key, default):
 
 def save_data(key):
     data = st.session_state[key]
-    # 1. 로컬 저장
     try:
         with open(FILES[key], "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        st.error(f"로컬 저장 실패 ({key}): {e}")
-    
-    # 2. 클라우드 저장
-    success = save_to_cloud(key, data)
-    return success
+    except: pass
+    return save_to_cloud(key, data)
 
-# 세션 초기화 및 데이터 동기화
 for k in FILES.keys():
     if k not in st.session_state:
         st.session_state[k] = load_data(k, [] if k == 'bom_master' else {})
@@ -73,6 +66,26 @@ def get_mapped_factory(raw_factory):
     if f in ["2912", "2922", "2라인", "H2"]: return "2라인"
     if f in ["2913", "2923", "3라인", "H3"]: return "3라인"
     return "기타"
+
+def get_mapped_car_name(car_code):
+    c = str(car_code).strip().upper()
+    if "8V" in c: return "타스만"
+    if "GZ" in c or "HC" in c: return "쏘렌토"
+    if "OT" in c or "TO" in c: return "니로"
+    if "5H" in c: return "SP3"
+    if "AS" in c: return "EV6"
+    if "EX" in c or "HV" in c: return "K5"
+    if "GG" in c or "GL" in c: return "K8"
+    if "DL" in c: return "K5(DL3)"
+    if "NQ" in c: return "스포티지"
+    return c
+
+def is_excluded_car(fac, car):
+    f = get_mapped_factory(fac)
+    c_up = str(car).strip().upper()
+    if f == "1라인" and c_up in ["C5", "DJ", "EN"]: return True
+    if f == "2라인" and c_up in ["DQ", "G5", "AS", "DJ"]: return True
+    return False
 
 def extract_date_from_filename(file_path, fallback):
     filename = os.path.basename(str(file_path))
@@ -124,8 +137,7 @@ def parse_bom(file):
             new_spec.append(spec_obj)
         st.session_state.bom_master = new_spec
         st.session_state.part_vendor.update(new_vendors)
-        save_data('bom_master')
-        save_data('part_vendor')
+        save_data('bom_master'); save_data('part_vendor')
         return f"✅ BOM 갱신 완료 ({len(new_spec)}건)"
     except Exception as e: return f"❌ BOM 에러: {e}"
 
@@ -135,76 +147,52 @@ def parse_system_plan(files, fallback_date):
     for f in files:
         target_date = extract_date_from_filename(f.name, fallback_date)
         if target_date not in st.session_state.plan: st.session_state.plan[target_date] = {}
+        if target_date not in st.session_state.sales: st.session_state.sales[target_date] = {}
         try:
             df = safe_read_excel(f, header=None)
-            c_alc, c_total, c_fac = -1, -1, -1
+            c_alc, c_total, c_fac, c_act = -1, -1, -1, -1
             for r in range(min(15, len(df))):
                 row = [str(x).replace(" ", "").upper() for x in df.iloc[r]]
                 if "ALC" in row: c_alc = row.index("ALC")
                 if "TOTAL" in row or "D+0TOTAL" in row: c_total = row.index("TOTAL") if "TOTAL" in row else row.index("D+0TOTAL")
                 if "2911" in row: c_fac = row.index("2911")
-            if c_alc != -1 and c_total != -1:
+                if "실적" in row or "D-1" in row: c_act = row.index("실적") if "실적" in row else row.index("D-1")
+            if c_alc != -1:
                 for i in range(r+1, len(df)):
                     row = df.iloc[i]
                     alc = str(row[c_alc]).strip().upper()
                     if not alc or alc in ("NAN", ""): continue
-                    try: qty = int(float(str(row[c_total]).replace(',', '')))
-                    except: qty = 0
-                    if qty > 0:
-                        fac = get_mapped_factory(row[c_fac] if c_fac != -1 else "2911")
-                        key = f"{fac}_{alc}"
-                        st.session_state.plan[target_date][key] = st.session_state.plan[target_date].get(key, 0) + qty
-                        plan_count += 1
+                    fac = get_mapped_factory(row[c_fac] if c_fac != -1 else "2911")
+                    key = f"{fac}_{alc}"
+                    try: 
+                        p_qty = int(float(str(row[c_total]).replace(',', ''))) if c_total != -1 else 0
+                        a_qty = int(float(str(row[c_act]).replace(',', ''))) if c_act != -1 else 0
+                    except: p_qty, a_qty = 0, 0
+                    if p_qty > 0: st.session_state.plan[target_date][key] = st.session_state.plan[target_date].get(key, 0) + p_qty
+                    if a_qty > 0: st.session_state.sales[target_date][key] = st.session_state.sales[target_date].get(key, 0) + a_qty
+                    plan_count += 1
         except: pass
     if plan_count > 0:
-        save_data('plan')
-        return f"✅ 계획 {plan_count}건 파싱 완료"
+        save_data('plan'); save_data('sales')
+        return f"✅ 계획/실적 {plan_count}건 파싱 완료"
     return "❌ 데이터 추출 실패"
-
-def parse_vendor_plan(files):
-    all_vendor_plan = {}
-    for f in files:
-        try:
-            df = safe_read_excel(f, header=None)
-            fname = f.name.upper()
-            if "핸즈" in fname:
-                for i in range(4, len(df)):
-                    row = df.iloc[i]
-                    if pd.isna(row[0]) or str(row[0]).strip() == "": continue
-                    pn = str(row[1]).strip().replace("-", "").upper()
-                    try:
-                        qty = int(float(str(row[16]).replace(',', ''))) # Q열
-                        if qty > 0: all_vendor_plan[pn] = all_vendor_plan.get(pn, 0) + qty
-                    except: pass
-            else:
-                # 기본 파서 (B열 품번, P열 수량 가정)
-                for i in range(len(df)):
-                    pn = str(df.iloc[i, 1]).strip().replace("-", "").upper()
-                    try:
-                        qty = int(float(str(df.iloc[i, 15]).replace(',', '')))
-                        if qty > 0: all_vendor_plan[pn] = all_vendor_plan.get(pn, 0) + qty
-                    except: pass
-        except: pass
-    st.session_state.vendor_plan = all_vendor_plan
-    save_data('vendor_plan')
-    return f"✅ 업체 계획 {len(all_vendor_plan)}건 갱신"
 
 # ==========================================
 # 3. 사이드바 UI 및 메뉴
 # ==========================================
 st.sidebar.markdown("<div style='font-size:20px; font-weight:bold; color:#1E3A8A;'>🚀 스마트 공정 관리 시스템</div>", unsafe_allow_html=True)
-st.sidebar.write(f"Ver 56.4 (클라우드 동기화)")
+st.sidebar.write(f"Ver 56.5 (클라우드 동기화)")
 
 menu = st.sidebar.radio("메뉴를 선택하세요", [
     "1. 데이터 업로드 센터",
     "2. 수불/실적 모니터링",
     "3. 상세시간 소요량 전개",
-    "4. 업체계획 크로스체크"
+    "4. 업체계획 크로스체크",
+    "5. 실적 가로전개표"
 ])
 
 if menu == "1. 데이터 업로드 센터":
     st.title("📁 데이터 업로드 센터")
-    st.info("💡 여기서 올린 데이터는 모든 메뉴에서 공유되며 클라우드에 자동 저장됩니다.")
     with st.expander("⚙️ 0. 기초 마스터 데이터 갱신 (BOM 사양표)", expanded=True):
         f1 = st.file_uploader("BOM 사양표 (Excel)", type=['xls', 'xlsx'])
         if st.button("마스터 갱신") and f1: st.success(parse_bom(f1))
@@ -212,18 +200,15 @@ if menu == "1. 데이터 업로드 센터":
         d2 = st.date_input("기준일")
         f3 = st.file_uploader("전개표 업로드", type=['xls', 'xlsx'], accept_multiple_files=True)
         if st.button("계획 파싱") and f3: st.success(parse_system_plan(f3, str(d2)))
-    with st.expander("🚚 2. 업체 통보 계획 업로드", expanded=True):
-        f4 = st.file_uploader("업체 파일", type=['xls', 'xlsx'], accept_multiple_files=True)
-        if st.button("업체 데이터 파싱") and f4: st.success(parse_vendor_plan(f4))
 
 elif menu == "2. 수불/실적 모니터링":
     st.title("📊 수불/실적 모니터링")
-    st.info("준비 중인 메뉴입니다. (기본 데이터 연동 완료)")
+    st.info("준비 중인 메뉴입니다.")
 
 elif menu == "3. 상세시간 소요량 전개":
     st.title("🕒 상세시간 소요량 전개")
     dates = sorted(list(st.session_state.plan.keys()), reverse=True)
-    if not dates: st.warning("업로드 센터에서 생산계획을 먼저 올려주세요.")
+    if not dates: st.warning("생산계획을 먼저 올려주세요.")
     else:
         sel_date = st.selectbox("조회 일자", dates)
         plan_d = st.session_state.plan.get(sel_date, {})
@@ -239,15 +224,13 @@ elif menu == "3. 상세시간 소요량 전개":
                         pn_clean = pn.replace("-", "").upper()
                         reqs[pn_clean] = reqs.get(pn_clean, 0) + (total_qty * q_val)
         if reqs:
-            st.write(f"### {sel_date} 소요량 집계")
             df = pd.DataFrame([{"품번": k, "업체명": st.session_state.part_vendor.get(k, "미상"), "소요량": v} for k, v in reqs.items()])
             st.dataframe(df, use_container_width=True)
-        else: st.info("데이터가 없습니다.")
 
 elif menu == "4. 업체계획 크로스체크":
     st.title("⚖️ 업체계획 크로스체크")
     dates = sorted(list(st.session_state.plan.keys()), reverse=True)
-    if not dates: st.warning("시스템 계획 데이터가 없습니다.")
+    if not dates: st.warning("계획 데이터가 없습니다.")
     else:
         sel_date = st.selectbox("조회 일자", dates)
         plan_d = st.session_state.plan.get(sel_date, {})
@@ -266,12 +249,50 @@ elif menu == "4. 업체계획 크로스체크":
             data = []
             for pn, req_qty in reqs.items():
                 vend_qty = st.session_state.vendor_plan.get(pn, 0)
-                data.append({
-                    "품번": pn,
-                    "업체명": st.session_state.part_vendor.get(pn, "미상"),
-                    "시스템 소요량": req_qty,
-                    "업체 통보량": vend_qty,
-                    "차이": vend_qty - req_qty
-                })
-            st.dataframe(pd.DataFrame(data).style.map(lambda x: "color: red" if x < 0 else "color: blue", subset=["차이"]), use_container_width=True)
-        else: st.info("산출된 소요량이 없습니다.")
+                data.append({"품번": pn, "업체명": st.session_state.part_vendor.get(pn, "미상"), "시스템 소요량": req_qty, "업체 통보량": vend_qty, "차이": vend_qty - req_qty})
+            st.dataframe(pd.DataFrame(data), use_container_width=True)
+
+elif menu == "5. 실적 가로전개표":
+    st.title("📈 조립 실적 일별 가로전개표")
+    dates = sorted(list(st.session_state.sales.keys()))
+    if not dates: st.warning("실적 데이터가 없습니다.")
+    else:
+        # Build ALC mapping from BOM
+        alc_info = {}
+        for sp in st.session_state.bom_master:
+            fac, alc = str(sp.get('_factory', '미상')).strip(), str(sp.get('_alc', '')).strip().upper()
+            car = get_mapped_car_name(str(sp.get('_carModel', '차종미상')).strip())
+            mapped_fac = get_mapped_factory(fac)
+            if mapped_fac: alc_info[f"{mapped_fac}_{alc}"] = {"fac": mapped_fac, "car": car}
+        
+        agg = {}
+        for d in dates:
+            for key, val in st.session_state.sales[d].items():
+                if val == 0: continue
+                info = alc_info.get(key, {"fac": "기타", "car": key})
+                f, c = info["fac"], info["car"]
+                if f not in agg: agg[f] = {}
+                if c not in agg[f]: agg[f][c] = {dd: 0 for dd in dates}
+                agg[f][c][d] += val
+        
+        records = []
+        for f in sorted(agg.keys()):
+            subtotal = {d: 0 for d in dates}
+            for c in sorted(agg[f].keys()):
+                r = {"라인": f, "차종": c}
+                r_tot = 0
+                for d in dates:
+                    v = agg[f][c][d]
+                    r[d] = v
+                    subtotal[d] += v
+                    r_tot += v
+                r["총누적"] = r_tot
+                records.append(r)
+            sr = {"라인": f, "차종": "소계"}
+            sr_tot = 0
+            for d in dates:
+                v = subtotal[d]; sr[d] = v; sr_tot += v
+            sr["총누적"] = sr_tot; records.append(sr)
+        
+        df = pd.DataFrame(records)
+        if not df.empty: st.dataframe(df, use_container_width=True)
